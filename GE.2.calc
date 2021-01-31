@@ -1,0 +1,26 @@
+# generate 1,000 GE2 values distributed across all Red List categories 
+# and assign a distribution of GE2 values to each RL category to capture uncertainty
+
+pext <- rev(c(0.97, 0.97/2, 0.97/4,0.97/8,0.97/16))
+GE.2.calc <- function(pext){
+  require(geiger)
+  treesim <- sim.bdtree(n=10000)
+  iucn <- sample(1:5, size=length(treesim$tip.label), replace=TRUE)
+  data <- data.frame(species=treesim$tip.label, pext=pext[iucn])
+  data <- data[order(data$pext),]
+  data$rank <- seq_len(nrow(data))
+  rank <- c(0, with(data, tapply(rank, pext, median)))
+  pext <- c(0, pext)
+  rank.sq <- rank^2; rank.cub <- rank^3; rank.qu <- rank^4; rank.quu <- rank^5
+  model <- lm(pext ~ rank + rank.sq + rank.cub + rank.qu)
+  data$rank.sq <- data$rank^2; data$rank.cub <- data$rank^3; data$rank.qu <- data$rank^4; data$rank.quu <- data$rank^5
+  data$rank.pext <- predict(model, data)
+  data$rank.pext[data$rank.pext <= 0] <- 0.0001
+  data$rank.pext[data$rank.pext >= 1] <- 0.9999
+  pext.LC <- data.frame(RL.cat = "LC", pext =data$rank.pext[data$pext == pext[2]])
+  pext.NT <- data.frame(RL.cat = "NT", pext =data$rank.pext[data$pext == pext[3]])
+  pext.VU <- data.frame(RL.cat = "VU", pext =data$rank.pext[data$pext == pext[4]])
+  pext.EN <- data.frame(RL.cat = "EN", pext =data$rank.pext[data$pext == pext[5]])
+  pext.CR <- data.frame(RL.cat = "CR", pext =data$rank.pext[data$pext == pext[6]])
+  return(rbind(pext.CR,pext.EN, pext.VU, pext.NT, pext.LC))
+}
