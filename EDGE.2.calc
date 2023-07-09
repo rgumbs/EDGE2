@@ -1,3 +1,5 @@
+####### EDGE2 calculation #########
+
 # provide phylogenetic tree and dataframe with two columns: 
 # the first comprising species names, the second comprising their associated GE2 scores (between 0 and 1)
 # function returns three objects: 
@@ -5,34 +7,93 @@
 # 2. expected PD loss tree
 # 3. PD and expected PD loss in MY for the clade
 
-EDGE.2.calc <- function(tree, pext){
+# remove excess pext, and reorders to same order as tree$tip.label
+into_order <- function(tree, pext){
+  new_pext <- pext[match(tree$tip.label, pext$species),]
+return (new_pext)
+}
+
+# order tree components
+reorder_tree <- function(tree, ordering){
+  tree@edge.length <- tree@edge.length[ordering]
+  tree@edge <- tree@edge[ordering,]
+  return(tree)
+}
+
+
+# EDGE2 Function
+EDGE2_mod <- function(tree, pext){
+  
   require(phylobase)
   require(data.table)
+  
+  names(pext) <- c("species","pext")
+  
+  N_species <- length(tree$tip.label)
+  N_nodes <- tree$Nnode
+  N_tot <- N_species + N_nodes
+  
+  # ensure extinction probabilities are given in same order as tree$tip.label.
+  if (!identical(tree$tip.label, pext$species)){
+    pext <- into_order(tree, pext)
+  }
+  
   if(!class(tree) == "phylo"){
     tree <- as(tree, "phylo")
   }
-  tree_dat <- data.frame(Species = as.character(unique(tree$tip.label)),
-                         TBL = tree$edge.length[sapply(c(1:length(tree$tip.label)),
-                                      function(x,y) which(y==x),y=tree$edge[,2])], 
-                         pext = NA, ED = NA, EDGE = NA)
+  
+  tree_dat <- data.frame(Species = as.character(tree$tip.label),
+                         TBL = NA, 
+                         pext = pext$pext, ED = NA, EDGE = NA)
   ePD.dat <- data.frame(PD = sum(tree$edge.length),ePDloss = NA)
+  
   tree <- as(tree, "phylo4")
-  names(pext) <- c("species","pext")
-  for(i in 1:length(tree_dat$Species)){
-    tree_dat$pext[i] <- pext$pext[pext$species == tree_dat$Species[i]]
+  root <- rootNode(tree)
+  nodes <- c(root, descendants(tree, root, "all"))
+  
+  # reorder tree components more instinctively, such that nodes are easier to find
+  ord <- order(nodes)
+  tree <- reorder_tree(tree, ord)
+  nodes <- nodes[ord]
+  
+  tree_dat$TBL <- tree@edge.length[1:N_species]
+  
+  node_data <- data.frame(Node = 1:N_tot, Pext = rep(1, N_tot), Edge_Sum = NA)
+  node_data[1:N_species, 2] <- pext[,2]
+  
+  # assign the product of its descendant tips to each node
+  for (i in c(1:length(tree@label), N_tot:(root+1))){         # for each node, beginning with tips
+      anc <- tree@edge[i,1]                                   # find ancestor of node
+      node_data[anc, 2] <- node_data[anc, 2]*node_data[i,2]   # muliply ancestor value by node "pext" 
   }
-  nodes <- descendants(tree, rootNode(tree), "all")
+
+  # multiply each edge.length by each pext caluclated above
   for(i in 1:length(nodes)){
-    tips <- descendants(tree, nodes[i], "tips")
-    tips <- names(tips)
-    tipscores <- which(pext$species %in% tips)
-    tree@edge.length[which(tree@edge[,2] == nodes[i])] <- edgeLength(tree, nodes[i])*prod(pext$pext[tipscores])
-    }
-  for(i in 1:length(tree_dat$Species)){
-    tree_dat$EDGE[i] <- sum(tree@edge.length[which(tree@edge[,2] %in% ancestors(tree, 
-                                                                                which(tipLabels(tree) == tree_dat$Species[i]), "ALL"))], na.rm=T)
-    tree_dat$ED[i] <- tree_dat$EDGE[i] / tree_dat$pext[i] 
-   }
+    tree@edge.length[i] <- tree@edge.length[i]*node_data[i,2]
+  }
+  save(tree, file ="tree.rda")
+
+  if (is.na(tree@edge.length[root])){
+    tree@edge.length[root] <- 0
+  }
+  node_data$Edge_Sum[root] <- tree@edge.length[root]
+  
+  # for each internal node, summate ancesteral edgelengths
+  for (i in (root+1):N_tot){
+    ans <- tree@edge[i,1]
+    node_data$Edge_Sum[i] <- node_data$Edge_Sum[ans] + tree@edge.length[i]
+  }
+  
+  # for each tip, summate ancesteral edgelengths to find EDGE2 score
+  for (i in 1:N_species){
+    ans <- tree@edge[i,1]
+    tree_dat$EDGE[i] <- node_data$Edge_Sum[ans] + tree@edge.length[i]
+  }  
+  
+  tree_dat$ED <- tree_dat$EDGE / tree_dat$pext
+  # reorder tree
+  tree <- reorder_tree(tree, order(ord))
+ 
   tree <- as(tree, "phylo")
   ePD.dat$ePDloss <- sum(tree$edge.length)
   edge.res <- list(tree_dat,tree,ePD.dat)
